@@ -24,7 +24,7 @@ class BotManager:
     async def init_telethon(self):
         """تهيئة Telethon"""
         try:
-            self.client = TelegramClient('session_name', API_ID, API_HASH)
+            self.client = TelegramClient('session_x', API_ID, API_HASH)
             await self.client.start(phone=PHONE_NUMBER)
             print("✅ Telethon connected successfully")
             return True

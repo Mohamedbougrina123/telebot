@@ -10,7 +10,7 @@ import os
 app = Flask(__name__)
 
 BOT_TOKEN = "8328267645:AAEgq7skSPifXizqPriMkiUt4oDPPm-I5R8"
-WEBHOOK_URL = "https://telebot-cbyyl3it6-mohamed-bougrina-s-projects.vercel.app/"
+WEBHOOK_URL = "https://telebot-cbyyl3it6-mohamed-bougrina-s-projects.vercel.app/webhook"
 API_ID = 29520252
 API_HASH = '55a15121bb420b21c3f9e8ccabf964cf'
 PHONE_NUMBER = '+212669720067'
@@ -138,9 +138,10 @@ def set_webhook():
     payload = {'url': WEBHOOK_URL}
     
     try:
-        requests.post(url, json=payload)
-    except:
-        pass
+        response = requests.post(url, json=payload)
+        print(f"Webhook set: {response.status_code}")
+    except Exception as e:
+        print(f"Webhook error: {e}")
 
 def auto_restart():
     def checker():

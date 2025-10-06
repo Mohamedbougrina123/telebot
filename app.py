@@ -9,8 +9,8 @@ import os
 
 app = Flask(__name__)
 
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+BOT_TOKEN = "8328267645:AAEgq7skSPifXizqPriMkiUt4oDPPm-I5R8"
+WEBHOOK_URL = "https://telebot-cbyyl3it6-mohamed-bougrina-s-projects.vercel.app/"
 API_ID = 29520252
 API_HASH = '55a15121bb420b21c3f9e8ccabf964cf'
 PHONE_NUMBER = '+212669720067'

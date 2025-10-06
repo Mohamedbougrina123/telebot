@@ -9,7 +9,7 @@ from telethon import TelegramClient
 app = Flask(__name__)
 
 BOT_TOKEN = "8328267645:AAEgq7skSPifXizqPriMkiUt4oDPPm-I5R8"
-WEBHOOK_URL = "https://hackerchat.pythonanywhere.com/webhook"
+WEBHOOK_URL = "https://telebot-cbyyl3it6-mohamed-bougrina-s-projects.vercel.app/api/webhook"
 API_ID = 29520252
 API_HASH = '55a15121bb420b21c3f9e8ccabf964cf'
 PHONE_NUMBER = '+212669720067'
@@ -90,9 +90,9 @@ bot_manager = BotManager()
 
 @app.route('/')
 def home():
-    return "🤖 Telegram Bot is Running on PythonAnywhere!"
+    return "🤖 Telegram Bot is Running on Vercel!"
 
-@app.route('/webhook', methods=['POST', 'GET'])
+@app.route('/api/webhook', methods=['POST', 'GET'])
 def webhook():
     if request.method == 'GET':
         return "✅ Webhook is active and ready!"
@@ -198,3 +198,6 @@ def set_webhook():
 
 # تعيين الويب هوك عند التشغيل
 set_webhook()
+
+if __name__ == '__main__':
+    app.run(debug=True)

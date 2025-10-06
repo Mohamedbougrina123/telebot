@@ -62,7 +62,7 @@ class BotManager:
                     if success:
                         self.loop_count += 1
                         print(f"✅ Sent: {email} - Count: {self.loop_count}")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(3)
                 except Exception as e:
                     print(f"❌ Loop error: {e}")
                     await asyncio.sleep(1)

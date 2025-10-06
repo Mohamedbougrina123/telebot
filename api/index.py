@@ -65,7 +65,7 @@ class BotManager:
                     await asyncio.sleep(1)
                 except Exception as e:
                     print(f"❌ Loop error: {e}")
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(1)
         
         def start_loop():
             loop = asyncio.new_event_loop()

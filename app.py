@@ -55,19 +55,17 @@ bot_manager = BotManager()
 def home():
     return "Bot Running"
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/webhook', methods=['POST', 'GET'])
 def webhook():
+    if request.method == 'GET':
+        return "Webhook is active! ✅"
+    
     data = request.get_json()
     
     if 'message' in data:
         message = data['message']
         chat_id = message['chat']['id']
         text = message.get('text', '').strip()
-        
-        user_id = message['from']['id']
-        if not is_authorized_user(user_id):
-            send_message(chat_id, "❌ Unauthorized")
-            return jsonify({"status": "success"}), 200
         
         if text.startswith('/start'):
             handle_start(chat_id, text)
@@ -119,10 +117,6 @@ def handle_help(chat_id):
 /help - This help
 """
     send_message(chat_id, help_text)
-
-def is_authorized_user(user_id):
-    authorized_users = [123456789]
-    return user_id in authorized_users
 
 def send_message(chat_id, text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'

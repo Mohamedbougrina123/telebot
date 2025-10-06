@@ -1,16 +1,15 @@
 from flask import Flask, request, jsonify
 import requests
-import asyncio
-from telethon import TelegramClient
+import re
 import threading
 import time
-import re
-import os
+import asyncio
+from telethon import TelegramClient
 
 app = Flask(__name__)
 
 BOT_TOKEN = "8328267645:AAEgq7skSPifXizqPriMkiUt4oDPPm-I5R8"
-WEBHOOK_URL = "https://telebot-cbyyl3it6-mohamed-bougrina-s-projects.vercel.app/webhook"
+WEBHOOK_URL = "https://hackerchat.pythonanywhere.com/webhook"
 API_ID = 29520252
 API_HASH = '55a15121bb420b21c3f9e8ccabf964cf'
 PHONE_NUMBER = '+212669720067'
@@ -19,66 +18,111 @@ class BotManager:
     def __init__(self):
         self.running = False
         self.loop_count = 0
+        self.current_email = ""
+        self.client = None
     
-    async def send_message(self, text):
-        async with TelegramClient('session_x', API_ID, API_HASH) as client:
-            await client.start(phone=PHONE_NUMBER)
-            await client.send_message('@fakemailbot', text)
+    async def init_telethon(self):
+        """تهيئة Telethon"""
+        try:
+            self.client = TelegramClient('session_name', API_ID, API_HASH)
+            await self.client.start(phone=PHONE_NUMBER)
+            print("✅ Telethon connected successfully")
+            return True
+        except Exception as e:
+            print(f"❌ Telethon error: {e}")
+            return False
+    
+    async def send_telethon_message(self, text):
+        """إرسال رسالة عبر Telethon"""
+        try:
+            if self.client and self.client.is_connected():
+                await self.client.send_message('@fakemailbot', text)
+                return True
+            else:
+                print("❌ Telethon client not connected")
+                return False
+        except Exception as e:
+            print(f"❌ Error sending message: {e}")
+            return False
     
     def start_bot(self, email):
         self.running = True
         self.loop_count = 0
+        self.current_email = email
         
-        async def run_bot():
+        async def run_async():
+            # تهيئة Telethon
+            if not await self.init_telethon():
+                return
+            
+            # حلقة الإرسال
             while self.running:
                 try:
-                    await self.send_message(email)
-                    self.loop_count += 1
+                    success = await self.send_telethon_message(email)
+                    if success:
+                        self.loop_count += 1
+                        print(f"✅ Sent: {email} - Count: {self.loop_count}")
                     await asyncio.sleep(1)
                 except Exception as e:
+                    print(f"❌ Loop error: {e}")
                     await asyncio.sleep(5)
         
         def start_loop():
-            asyncio.run(run_bot())
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(run_async())
+            except Exception as e:
+                print(f"❌ Async loop error: {e}")
+            finally:
+                loop.close()
         
         thread = threading.Thread(target=start_loop)
         thread.daemon = True
         thread.start()
-        return thread
     
     def stop_bot(self):
         self.running = False
+        if self.client:
+            asyncio.run(self.client.disconnect())
 
 bot_manager = BotManager()
 
 @app.route('/')
 def home():
-    return "Bot Running"
+    return "🤖 Telegram Bot is Running on PythonAnywhere!"
 
 @app.route('/webhook', methods=['POST', 'GET'])
 def webhook():
     if request.method == 'GET':
-        return "Webhook is active! ✅"
+        return "✅ Webhook is active and ready!"
     
-    data = request.get_json()
-    
-    if 'message' in data:
-        message = data['message']
-        chat_id = message['chat']['id']
-        text = message.get('text', '').strip()
+    try:
+        data = request.get_json()
+        print(f"📩 Received data: {data}")
         
-        if text.startswith('/start'):
-            handle_start(chat_id, text)
-        elif text == '/stop':
-            handle_stop(chat_id)
-        elif text == '/status':
-            handle_status(chat_id)
-        elif text == '/help':
-            handle_help(chat_id)
-        else:
-            send_message(chat_id, "❌ Unknown command")
+        if 'message' in data:
+            message = data['message']
+            chat_id = message['chat']['id']
+            text = message.get('text', '').strip()
+            
+            print(f"💬 Message from {chat_id}: {text}")
+            
+            if text.startswith('/start'):
+                handle_start(chat_id, text)
+            elif text == '/stop':
+                handle_stop(chat_id)
+            elif text == '/status':
+                handle_status(chat_id)
+            elif text == '/help':
+                handle_help(chat_id)
+            else:
+                send_message(chat_id, "❌ Unknown command")
     
-    return jsonify({"status": "success"}), 200
+    except Exception as e:
+        print(f"❌ Webhook error: {e}")
+    
+    return jsonify({"status": "success"})
 
 def handle_start(chat_id, text):
     email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
@@ -90,11 +134,11 @@ def handle_start(chat_id, text):
     email = email_match.group()
     
     if bot_manager.running:
-        send_message(chat_id, "⚠️ Bot already running")
+        send_message(chat_id, f"⚠️ Bot already running with: {bot_manager.current_email}")
         return
     
     bot_manager.start_bot(email)
-    send_message(chat_id, f"✅ Started with: {email}")
+    send_message(chat_id, f"✅ Started with: {email}\n🤖 Bot is now sending messages to @fakemailbot")
 
 def handle_stop(chat_id):
     if not bot_manager.running:
@@ -102,51 +146,55 @@ def handle_stop(chat_id):
         return
     
     bot_manager.stop_bot()
-    send_message(chat_id, f"⏹️ Stopped - Count: {bot_manager.loop_count}")
+    send_message(chat_id, f"⏹️ Stopped - Total messages sent: {bot_manager.loop_count}")
 
 def handle_status(chat_id):
     status = "🟢 Running" if bot_manager.running else "🔴 Stopped"
-    message = f"Status: {status}\nCount: {bot_manager.loop_count}"
+    email_info = f" with: {bot_manager.current_email}" if bot_manager.running else ""
+    message = f"Status: {status}{email_info}\n📊 Message count: {bot_manager.loop_count}"
     send_message(chat_id, message)
 
 def handle_help(chat_id):
     help_text = """
-/start email - Start bot
+🤖 Bot Commands:
+
+/start email - Start bot with email
 /stop - Stop bot  
-/status - Show status
-/help - This help
+/status - Show bot status
+/help - Show this help message
+
+Example: 
+/start test@gmail.com
+
+📝 The bot will send the email repeatedly to @fakemailbot
 """
     send_message(chat_id, help_text)
 
 def send_message(chat_id, text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
-    payload = {'chat_id': chat_id, 'text': text}
+    payload = {
+        'chat_id': chat_id,
+        'text': text
+    }
     
     try:
-        requests.post(url, json=payload)
-    except:
-        pass
+        response = requests.post(url, json=payload, timeout=10)
+        print(f"📤 Message sent to {chat_id}: {response.status_code}")
+    except Exception as e:
+        print(f"❌ Error sending message: {e}")
 
 def set_webhook():
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook'
     payload = {'url': WEBHOOK_URL}
     
     try:
-        response = requests.post(url, json=payload)
-        print(f"Webhook set: {response.status_code}")
+        response = requests.post(url, json=payload, timeout=10)
+        print(f"🌐 Webhook set: {response.status_code}")
+        if response.status_code == 200:
+            result = response.json()
+            print(f"✅ Webhook result: {result}")
     except Exception as e:
-        print(f"Webhook error: {e}")
+        print(f"❌ Webhook error: {e}")
 
-def auto_restart():
-    def checker():
-        while True:
-            time.sleep(60)
-    
-    thread = threading.Thread(target=checker)
-    thread.daemon = True
-    thread.start()
-
-if __name__ == '__main__':
-    set_webhook()
-    auto_restart()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+# تعيين الويب هوك عند التشغيل
+set_webhook()

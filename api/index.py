@@ -5,12 +5,14 @@ import threading
 import asyncio
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+import os
 
 app = Flask(__name__)
 
-BOT_TOKEN = "8328267645:AAEgq7skSPifXizqPriMkiUt4oDPPm-I5R8"
-API_ID = 22154260
-API_HASH = '6bae7de9fdd9031aede658ec8a8b57c0'
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8328267645:AAEgq7skSPifXizqPriMkiUt4oDPPm-I5R8")
+API_ID = int(os.environ.get('API_ID', 22154260))
+API_HASH = os.environ.get('API_HASH', '6bae7de9fdd9031aede658ec8a8b57c0')
+PORT = int(os.environ.get('PORT', 5000))
 
 class TelegramAuth:
     def __init__(self):
@@ -103,36 +105,46 @@ class BotManager:
         self.running = False
         self.loop_count = 0
         self.current_email = ""
+        self.thread = None
 
     def start_bot(self, email, chat_id):
+        if self.running:
+            return
+            
         self.running = True
         self.loop_count = 0
         self.current_email = email
 
-        async def run_async():
-            await telegram_auth.restore_session(chat_id)
-            
-            while self.running:
-                try:
-                    success = await telegram_auth.send_message(email)
-                    if success:
-                        self.loop_count += 1
-                    await asyncio.sleep(0.5)
-                except Exception as e:
-                    await asyncio.sleep(0.1)
+        def run_bot():
+            async def main():
+                await telegram_auth.restore_session(chat_id)
+                
+                while self.running:
+                    try:
+                        success = await telegram_auth.send_message(email)
+                        if success:
+                            self.loop_count += 1
+                        await asyncio.sleep(0.5)
+                    except Exception as e:
+                        await asyncio.sleep(0.1)
+                        continue
 
-        thread = threading.Thread(target=lambda: asyncio.run(run_async()))
-        thread.daemon = True
-        thread.start()
+            asyncio.run(main())
+
+        self.thread = threading.Thread(target=run_bot)
+        self.thread.daemon = True
+        self.thread.start()
 
     def stop_bot(self):
         self.running = False
+        if self.thread:
+            self.thread.join(timeout=1)
 
 bot_manager = BotManager()
 
 @app.route('/')
 def home():
-    return "Telegram Bot is Running!"
+    return "Telegram Bot is Running 24/7!"
 
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
@@ -177,11 +189,8 @@ def webhook():
                     email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
                     if email_match:
                         email = email_match.group()
-                        if not bot_manager.running:
-                            bot_manager.start_bot(email, chat_id)
-                            send_message(chat_id, f"بدأ الإرسال السريع باستخدام: {email}")
-                        else:
-                            send_message(chat_id, f"البوت يعمل بالفعل باستخدام: {bot_manager.current_email}")
+                        bot_manager.start_bot(email, chat_id)
+                        send_message(chat_id, f"بدأ الإرسال باستخدام: {email}\n⚡ يعمل 24/7")
                     else:
                         send_message(chat_id, "استخدم: /start_email your_email@gmail.com")
                 else:
@@ -202,7 +211,7 @@ def webhook():
                 send_message(chat_id, message)
 
             elif text == '/help':
-                help_text = "/start - بدء المصادقة\n/start_email email - بدء الإرسال السريع\n/stop - إيقاف البوت\n/status - الحالة\n/help - المساعدة"
+                help_text = "/start - بدء المصادقة\n/start_email email - بدء الإرسال 24/7\n/stop - إيقاف البوت\n/status - الحالة\n/help - المساعدة"
                 send_message(chat_id, help_text)
 
     except Exception as e:
@@ -219,4 +228,4 @@ def send_message(chat_id, text):
         pass
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=PORT, debug=False)

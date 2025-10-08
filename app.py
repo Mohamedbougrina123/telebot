@@ -18,10 +18,6 @@ API_ID = int(os.environ.get('API_ID', 22154260))
 API_HASH = os.environ.get('API_HASH', '6bae7de9fdd9031aede658ec8a8b57c0')
 PORT = int(os.environ.get('PORT', 10000))
 
-# إنشاء event loop عالمي واحد
-main_loop = asyncio.new_event_loop()
-asyncio.set_event_loop(main_loop)
-
 class TelegramAuth:
     def __init__(self):
         self.clients = {}
@@ -29,17 +25,19 @@ class TelegramAuth:
         self.user_states = {}
         self.phone_hash = {}
         self.session_strings = {}
-        self.lock = threading.Lock()
+        self.loop = asyncio.new_event_loop()
 
     def run_async(self, coro):
-        with self.lock:
-            return main_loop.run_until_complete(coro)
+        if not self.loop.is_running():
+            asyncio.set_event_loop(self.loop)
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=30)
 
     def connect_phone(self, phone_number, chat_id):
         try:
             async def connect_async():
                 session = StringSession()
                 client = TelegramClient(session, API_ID, API_HASH)
+                
                 await client.connect()
                 
                 if not await client.is_user_authorized():
@@ -258,7 +256,7 @@ def webhook():
             elif text == '/help':
                 help_text = """
 /start - بدء المصادقة
-/start_email email -  24/24 بدئ الارسال
+/start_email email - بدء الإرسال 24/7
 /stop - إيقاف البوت
 /status - الحالة
 /help - المساعدة

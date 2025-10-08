@@ -9,8 +9,8 @@ from telethon.tl.types import InputPeerUser
 app = Flask(__name__)
 
 BOT_TOKEN = "8328267645:AAEgq7skSPifXizqPriMkiUt4oDPPm-I5R8"
-API_ID = 29520252
-API_HASH = '55a15121bb420b21c3f9e8ccabf964cf'
+API_ID = 22154260
+API_HASH = '6bae7de9fdd9031aede658ec8a8b57c0'
 
 class TelegramAuth:
     def __init__(self):

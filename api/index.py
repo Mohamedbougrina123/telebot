@@ -31,7 +31,8 @@ class TelegramAuth:
                 result = await self.client.send_code_request(phone_number)
                 self.phone_hash[chat_id] = {
                     'phone': phone_number,
-                    'hash': result.phone_code_hash
+                    'hash': result.phone_code_hash,
+                    'session': session
                 }
                 self.phone_number = phone_number
                 return True, "تم إرسال الرمز"
@@ -48,24 +49,28 @@ class TelegramAuth:
             if chat_id in self.phone_hash:
                 phone_data = self.phone_hash[chat_id]
                 
-                session = StringSession()
-                self.client = TelegramClient(session, API_ID, API_HASH)
-                await self.client.connect()
-                
-                await self.client.sign_in(
-                    phone=phone_data['phone'],
-                    code=code,
-                    phone_code_hash=phone_data['hash']
-                )
-                
-                self.auth_ready = True
-                self.session_strings[chat_id] = session.save()
-                
-                return True, "تم تسجيل الدخول بنجاح"
+                try:
+                    await self.client.sign_in(
+                        phone=phone_data['phone'],
+                        code=code,
+                        phone_code_hash=phone_data['hash']
+                    )
+                    
+                    self.auth_ready = True
+                    self.session_strings[chat_id] = phone_data['session'].save()
+                    return True, "تم تسجيل الدخول بنجاح"
+                    
+                except Exception as sign_in_error:
+                    if "expired" in str(sign_in_error):
+                        result = await self.client.send_code_request(phone_data['phone'])
+                        self.phone_hash[chat_id]['hash'] = result.phone_code_hash
+                        return False, "انتهت صلاحية الرمز. تم إرسال رمز جديد، أرسل الرمز الجديد:"
+                    else:
+                        return False, f"خطأ في تسجيل الدخول: {str(sign_in_error)}"
             else:
                 return False, "لم يتم طلب رمز لهذا الرقم"
         except Exception as e:
-            return False, f"خطأ في تسجيل الدخول: {str(e)}"
+            return False, f"خطأ: {str(e)}"
 
     async def restore_session(self, chat_id):
         try:
@@ -178,7 +183,10 @@ def webhook():
                         telegram_auth.user_states[chat_id] = 'authenticated'
                         send_message(chat_id, "تم تسجيل الدخول بنجاح! أرسل /start_email your_email@gmail.com")
                     else:
-                        send_message(chat_id, message)
+                        if "رمز جديد" in message:
+                            send_message(chat_id, message)
+                        else:
+                            send_message(chat_id, message)
                 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)

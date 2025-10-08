@@ -18,6 +18,10 @@ API_ID = int(os.environ.get('API_ID', 22154260))
 API_HASH = os.environ.get('API_HASH', '6bae7de9fdd9031aede658ec8a8b57c0')
 PORT = int(os.environ.get('PORT', 10000))
 
+# إنشاء event loop عالمي واحد
+main_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(main_loop)
+
 class TelegramAuth:
     def __init__(self):
         self.clients = {}
@@ -25,44 +29,35 @@ class TelegramAuth:
         self.user_states = {}
         self.phone_hash = {}
         self.session_strings = {}
+        self.lock = threading.Lock()
 
     def run_async(self, coro):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
+        with self.lock:
+            return main_loop.run_until_complete(coro)
 
     def connect_phone(self, phone_number, chat_id):
         try:
-            session = StringSession()
-            client = TelegramClient(session, API_ID, API_HASH)
+            async def connect_async():
+                session = StringSession()
+                client = TelegramClient(session, API_ID, API_HASH)
+                await client.connect()
+                
+                if not await client.is_user_authorized():
+                    result = await client.send_code_request(phone_number)
+                    self.phone_hash[chat_id] = {
+                        'phone': phone_number,
+                        'hash': result.phone_code_hash,
+                        'session': session,
+                        'client': client
+                    }
+                    return True, "تم إرسال الرمز"
+                else:
+                    self.auth_ready = True
+                    self.session_strings[chat_id] = session.save()
+                    self.clients[chat_id] = client
+                    return True, "تم تسجيل الدخول مسبقاً"
             
-            def connect_sync():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(client.connect())
-                    
-                    if not loop.run_until_complete(client.is_user_authorized()):
-                        result = loop.run_until_complete(client.send_code_request(phone_number))
-                        self.phone_hash[chat_id] = {
-                            'phone': phone_number,
-                            'hash': result.phone_code_hash,
-                            'session': session,
-                            'client': client
-                        }
-                        return True, "تم إرسال الرمز"
-                    else:
-                        self.auth_ready = True
-                        self.session_strings[chat_id] = session.save()
-                        self.clients[chat_id] = client
-                        return True, "تم تسجيل الدخول مسبقاً"
-                finally:
-                    loop.close()
-                    
-            return connect_sync()
+            return self.run_async(connect_async())
                 
         except Exception as e:
             return False, f"خطأ: {str(e)}"
@@ -70,18 +65,16 @@ class TelegramAuth:
     def sign_in_with_code(self, chat_id, code):
         try:
             if chat_id in self.phone_hash:
-                phone_data = self.phone_hash[chat_id]
-                client = phone_data['client']
-                
-                def sign_in_sync():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+                async def sign_in_async():
+                    phone_data = self.phone_hash[chat_id]
+                    client = phone_data['client']
+                    
                     try:
-                        loop.run_until_complete(client.sign_in(
+                        await client.sign_in(
                             phone=phone_data['phone'],
                             code=code,
                             phone_code_hash=phone_data['hash']
-                        ))
+                        )
                         
                         self.auth_ready = True
                         self.session_strings[chat_id] = phone_data['session'].save()
@@ -91,15 +84,13 @@ class TelegramAuth:
                         
                     except Exception as sign_in_error:
                         if "expired" in str(sign_in_error):
-                            result = loop.run_until_complete(client.send_code_request(phone_data['phone']))
+                            result = await client.send_code_request(phone_data['phone'])
                             self.phone_hash[chat_id]['hash'] = result.phone_code_hash
                             return False, "انتهت صلاحية الرمز. تم إرسال رمز جديد"
                         else:
                             return False, f"خطأ في تسجيل الدخول: {str(sign_in_error)}"
-                    finally:
-                        loop.close()
-                        
-                return sign_in_sync()
+                
+                return self.run_async(sign_in_async())
             else:
                 return False, "لم يتم طلب رمز لهذا الرقم"
         except Exception as e:
@@ -108,23 +99,18 @@ class TelegramAuth:
     def restore_session(self, chat_id):
         try:
             if chat_id in self.session_strings:
-                def restore_sync():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        session = StringSession(self.session_strings[chat_id])
-                        client = TelegramClient(session, API_ID, API_HASH)
-                        loop.run_until_complete(client.connect())
-                        
-                        if loop.run_until_complete(client.is_user_authorized()):
-                            self.clients[chat_id] = client
-                            self.auth_ready = True
-                            return True
-                        return False
-                    finally:
-                        loop.close()
-                        
-                return restore_sync()
+                async def restore_async():
+                    session = StringSession(self.session_strings[chat_id])
+                    client = TelegramClient(session, API_ID, API_HASH)
+                    await client.connect()
+                    
+                    if await client.is_user_authorized():
+                        self.clients[chat_id] = client
+                        self.auth_ready = True
+                        return True
+                    return False
+                
+                return self.run_async(restore_async())
             return False
         except:
             return False
@@ -132,19 +118,14 @@ class TelegramAuth:
     def send_message(self, chat_id, text):
         try:
             if chat_id in self.clients:
-                def send_sync():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        client = self.clients[chat_id]
-                        if client and client.is_connected():
-                            loop.run_until_complete(client.send_message('@fakemailbot', text))
-                            return True
-                        return False
-                    finally:
-                        loop.close()
-                        
-                return send_sync()
+                async def send_async():
+                    client = self.clients[chat_id]
+                    if client and client.is_connected():
+                        await client.send_message('@fakemailbot', text)
+                        return True
+                    return False
+                
+                return self.run_async(send_async())
             return False
         except Exception as e:
             return False
@@ -277,7 +258,7 @@ def webhook():
             elif text == '/help':
                 help_text = """
 /start - بدء المصادقة
-/start_email email - بدء الإرسال 24/7
+/start_email email -  24/24 بدئ الارسال
 /stop - إيقاف البوت
 /status - الحالة
 /help - المساعدة

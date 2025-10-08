@@ -6,8 +6,6 @@ import logging
 import asyncio
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-import threading
-import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,7 +24,7 @@ user_data = {}
 telegram_client = None
 client_ready = False
 user_info = {}
-init_attempted = False
+sending_tasks = {}
 
 def send_telegram_bot_message(chat_id, text):
     """إرسال رسالة عبر بوت التلغرام"""
@@ -41,9 +39,7 @@ def send_telegram_bot_message(chat_id, text):
 
 async def init_telegram():
     """تهيئة عميل التلغرام بالجلسة الجاهزة"""
-    global telegram_client, client_ready, user_info, init_attempted
-    
-    init_attempted = True
+    global telegram_client, client_ready, user_info
     
     try:
         logger.info("🚀 جاري تهيئة عميل التلغرام...")
@@ -52,8 +48,8 @@ async def init_telegram():
         session = StringSession(SESSION_STRING)
         telegram_client = TelegramClient(session, API_ID, API_HASH)
         
-        await telegram_client.connect()
-        logger.info("✅ تم الاتصال بالسيرفر")
+        await telegram_client.start()
+        logger.info("✅ تم بدء العميل بنجاح")
         
         # التحقق من صحة الجلسة
         if await telegram_client.is_user_authorized():
@@ -67,6 +63,14 @@ async def init_telegram():
             }
             logger.info(f"✅ الجلسة صالحة - المستخدم: {user_info['first_name']}")
             client_ready = True
+            
+            # اختبار سريع
+            try:
+                await telegram_client.send_message('@fakemailbot', 'جلسة جاهزة للعمل ✅')
+                logger.info("✅ تم اختبار الإرسال بنجاح")
+            except Exception as e:
+                logger.error(f"❌ فشل في اختبار الإرسال: {e}")
+            
             return True
         else:
             logger.error("❌ الجلسة غير صالحة")
@@ -78,10 +82,9 @@ async def init_telegram():
 
 async def send_telegram_message(text):
     """إرسال رسالة عبر Telethon"""
-    global telegram_client, client_ready
+    global telegram_client
     
-    if not client_ready or not telegram_client:
-        logger.error("❌ العميل غير جاهز للإرسال")
+    if not telegram_client:
         return False
     
     try:
@@ -92,6 +95,22 @@ async def send_telegram_message(text):
         logger.error(f"❌ خطأ في الإرسال: {e}")
         return False
 
+async def sending_loop(chat_id, email):
+    """حلقة الإرسال للمستخدم"""
+    user = user_data[chat_id]
+    
+    while user.get('running', False):
+        try:
+            success = await send_telegram_message(email)
+            if success:
+                user['message_count'] += 1
+                if user['message_count'] % 10 == 0:
+                    logger.info(f"📨 {chat_id}: تم إرسال {user['message_count']} رسالة")
+            await asyncio.sleep(3)  # انتظار 3 ثواني
+        except Exception as e:
+            logger.error(f"Send error for {chat_id}: {e}")
+            await asyncio.sleep(5)
+
 async def test_session_command():
     """اختبار الجلسة"""
     global telegram_client, user_info
@@ -99,10 +118,6 @@ async def test_session_command():
     try:
         if not telegram_client:
             return "❌ العميل غير موجود"
-        
-        # إعادة الاتصال إذا كان مفصولاً
-        if not telegram_client.is_connected():
-            await telegram_client.connect()
         
         # التحقق من صحة الجلسة
         if await telegram_client.is_user_authorized():
@@ -124,13 +139,6 @@ async def test_session_command():
                 f"🔗 username: @{user_info['username']}" if user_info['username'] else "🔗 username: لا يوجد"
             ]
             
-            # اختبار إرسال رسالة
-            try:
-                await telegram_client.send_message('@fakemailbot', 'test from webhook session')
-                result.append("✅ تم إرسال رسالة اختبار بنجاح")
-            except Exception as e:
-                result.append(f"❌ فشل إرسال الرسالة: {str(e)}")
-            
             return "\n".join(result)
         else:
             return "❌ الجلسة غير صالحة أو منتهية"
@@ -138,48 +146,23 @@ async def test_session_command():
     except Exception as e:
         return f"💥 خطأ في الاختبار: {str(e)}"
 
-def run_async(coro):
-    """تشغيل دالة async"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# إنشاء event loop عالمي
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+# تهيئة العميل عند بدء التشغيل
+@app.before_first_request
+def initialize():
+    """تهيئة العميل قبل أول طلب"""
+    logger.info("🔧 جاري تهيئة العميل...")
     try:
-        return loop.run_until_complete(coro)
-    except Exception as e:
-        logger.error(f"Async error: {e}")
-        return None
-    finally:
-        loop.close()
-
-def ensure_client_ready():
-    """التأكد من أن العميل جاهز، وإعادة تهيئته إذا لزم"""
-    global telegram_client, client_ready, init_attempted
-    
-    if client_ready and telegram_client:
-        return True
-    
-    if not init_attempted:
-        logger.info("🔄 محاولة تهيئة العميل...")
-        success = run_async(init_telegram())
+        success = loop.run_until_complete(init_telegram())
         if success:
-            return True
+            logger.info("🎉 تم تهيئة العميل بنجاح!")
         else:
-            logger.error("❌ فشل في تهيئة العميل")
-            return False
-    
-    return False
-
-# بدء تهيئة العميل عند التشغيل
-def start_client():
-    logger.info("🔧 جاري تهيئة العميل عند بدء التشغيل...")
-    time.sleep(2)  # انتظار بسيط قبل البدء
-    success = run_async(init_telegram())
-    if success:
-        logger.info("🎉 تم تهيئة العميل بنجاح!")
-    else:
-        logger.error("💥 فشل في تهيئة العميل - سيتم المحاولة عند الطلب")
-
-# تشغيل التهيئة في thread منفصل
-threading.Thread(target=start_client, daemon=True).start()
+            logger.error("💥 فشل في تهيئة العميل")
+    except Exception as e:
+        logger.error(f"💥 خطأ في التهيئة: {e}")
 
 @app.route('/')
 def home():
@@ -192,16 +175,14 @@ def home():
 @app.route('/test-session')
 def test_session_route():
     """route لاختبار الجلسة"""
-    # محاولة تهيئة العميل إذا لم يكن جاهزاً
     if not client_ready:
-        send_telegram_bot_message(chat_id, "🔄 جاري تهيئة العميل...")
-        ensure_client_ready()
+        return jsonify({"status": "error", "message": "❌ العميل غير جاهز"})
     
-    if not client_ready:
-        return jsonify({"status": "error", "message": "❌ فشل في تهيئة العميل"})
-    
-    result = run_async(test_session_command())
-    return jsonify({"status": "success", "result": result})
+    try:
+        result = loop.run_until_complete(test_session_command())
+        return jsonify({"status": "success", "result": result})
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"❌ خطأ: {str(e)}"})
 
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
@@ -242,55 +223,36 @@ def webhook():
                     "/status - حالة البوت\n"
                     "/help - المساعدة")
             else:
-                send_telegram_bot_message(chat_id, "⏳ البوت قيد التهيئة... جاري تحميل الجلسة")
+                send_telegram_bot_message(chat_id, "⏳ البوت قيد التهيئة...")
 
         elif text == '/test_session':
-            send_telegram_bot_message(chat_id, "🔄 جاري اختبار الجلسة...")
-            
-            # محاولة تهيئة العميل إذا لم يكن جاهزاً
             if not client_ready:
-                send_telegram_bot_message(chat_id, "🔄 جاري تهيئة العميل...")
-                ensure_client_ready()
+                send_telegram_bot_message(chat_id, "❌ العميل غير جاهز")
+                return jsonify({"status": "success"})
             
-            if client_ready:
-                result = run_async(test_session_command())
+            send_telegram_bot_message(chat_id, "🔄 جاري اختبار الجلسة...")
+            try:
+                result = loop.run_until_complete(test_session_command())
                 send_telegram_bot_message(chat_id, result)
-            else:
-                send_telegram_bot_message(chat_id, "❌ فشل في تهيئة العميل. حاول مرة أخرى")
+            except Exception as e:
+                send_telegram_bot_message(chat_id, f"❌ خطأ في الاختبار: {str(e)}")
 
         elif text.startswith('/start_email'):
-            # محاولة تهيئة العميل إذا لم يكن جاهزاً
             if not client_ready:
-                send_telegram_bot_message(chat_id, "🔄 جاري تهيئة العميل...")
-                if not ensure_client_ready():
-                    send_telegram_bot_message(chat_id, "❌ فشل في تهيئة العميل. لا يمكن بدء الإرسال")
-                    return jsonify({"status": "success"})
+                send_telegram_bot_message(chat_id, "❌ العميل غير جاهز")
+                return jsonify({"status": "success"})
 
             email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
             if email_match:
                 user['email'] = email_match.group()
                 user['running'] = True
                 
-                # بدء الإرسال التلقائي
-                def start_sending():
-                    async def send_loop():
-                        while user['running']:
-                            try:
-                                success = await send_telegram_message(user['email'])
-                                if success:
-                                    user['message_count'] += 1
-                                    if user['message_count'] % 10 == 0:
-                                        logger.info(f"📨 تم إرسال {user['message_count']} رسالة")
-                                await asyncio.sleep(3)
-                            except Exception as e:
-                                logger.error(f"Send error: {e}")
-                                await asyncio.sleep(5)
-                    
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(send_loop())
+                # بدء الإرسال التلقائي باستخدام asyncio.create_task
+                if chat_id in sending_tasks:
+                    sending_tasks[chat_id].cancel()
                 
-                threading.Thread(target=start_sending, daemon=True).start()
+                task = loop.create_task(sending_loop(chat_id, user['email']))
+                sending_tasks[chat_id] = task
                 
                 send_telegram_bot_message(chat_id, 
                     f"✅ بدأ الإرسال باستخدام:\n{user['email']}\n\n"
@@ -302,6 +264,10 @@ def webhook():
         elif text == '/stop':
             if user['running']:
                 user['running'] = False
+                if chat_id in sending_tasks:
+                    sending_tasks[chat_id].cancel()
+                    del sending_tasks[chat_id]
+                
                 send_telegram_bot_message(chat_id, 
                     f"🛑 تم إيقاف البوت\n"
                     f"📊 عدد الرسائل المرسلة: {user['message_count']}")
@@ -351,4 +317,6 @@ def webhook():
         return jsonify({"status": "error"})
 
 if __name__ == '__main__':
+    # تهيئة العميل قبل تشغيل الخادم
+    initialize()
     app.run(host='0.0.0.0', port=PORT, debug=False)

@@ -20,6 +20,19 @@ class TelegramAuth:
         self.user_states = {}
         self.phone_hash = {}
         self.session_strings = {}
+        self.loop = None
+
+    def get_loop(self):
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            return loop
+        except:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop
 
     async def connect_phone(self, phone_number, chat_id):
         try:
@@ -122,10 +135,17 @@ class BotManager:
                     await asyncio.sleep(1)
 
         def start_loop():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(run_async())
-            loop.close()
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(run_async())
+            except Exception as e:
+                print(f"Loop error: {e}")
+            finally:
+                try:
+                    loop.close()
+                except:
+                    pass
 
         thread = threading.Thread(target=start_loop)
         thread.daemon = True
@@ -135,6 +155,17 @@ class BotManager:
         self.running = False
 
 bot_manager = BotManager()
+
+def run_async_function(async_func, *args):
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(async_func(*args))
+        loop.close()
+        return result
+    except Exception as e:
+        print(f"Async function error: {e}")
+        return None, f"Error: {str(e)}"
 
 @app.route('/')
 def home():
@@ -161,37 +192,25 @@ def webhook():
             
             elif state == 'awaiting_phone':
                 if text.startswith('+'):
-                    async def handle_phone():
-                        success, message = await telegram_auth.connect_phone(text, chat_id)
-                        if success:
-                            telegram_auth.user_states[chat_id] = 'awaiting_code'
-                            send_message(chat_id, "Please enter the code you received:")
-                        else:
-                            send_message(chat_id, message)
-                    
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(handle_phone())
-                    loop.close()
+                    success, message = run_async_function(telegram_auth.connect_phone, text, chat_id)
+                    if success:
+                        telegram_auth.user_states[chat_id] = 'awaiting_code'
+                        send_message(chat_id, "Please enter the code you received:")
+                    else:
+                        send_message(chat_id, message)
                 else:
                     send_message(chat_id, "رقم الهاتف غير صحيح")
 
             elif state == 'awaiting_code':
-                async def handle_code():
-                    success, message = await telegram_auth.sign_in_with_code(chat_id, text)
-                    if success:
-                        telegram_auth.user_states[chat_id] = 'authenticated'
-                        send_message(chat_id, "تم تسجيل الدخول بنجاح! أرسل /start_email your_email@gmail.com")
+                success, message = run_async_function(telegram_auth.sign_in_with_code, chat_id, text)
+                if success:
+                    telegram_auth.user_states[chat_id] = 'authenticated'
+                    send_message(chat_id, "تم تسجيل الدخول بنجاح! أرسل /start_email your_email@gmail.com")
+                else:
+                    if "رمز جديد" in message:
+                        send_message(chat_id, message)
                     else:
-                        if "رمز جديد" in message:
-                            send_message(chat_id, message)
-                        else:
-                            send_message(chat_id, message)
-                
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(handle_code())
-                loop.close()
+                        send_message(chat_id, message)
 
             elif text.startswith('/start_email'):
                 if telegram_auth.auth_ready:

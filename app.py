@@ -25,6 +25,7 @@ telegram_client = None
 client_ready = False
 user_info = {}
 sending_tasks = {}
+loop = None
 
 def send_telegram_bot_message(chat_id, text):
     """إرسال رسالة عبر بوت التلغرام"""
@@ -146,23 +147,27 @@ async def test_session_command():
     except Exception as e:
         return f"💥 خطأ في الاختبار: {str(e)}"
 
-# إنشاء event loop عالمي
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-# تهيئة العميل عند بدء التشغيل
-@app.before_first_request
-def initialize():
-    """تهيئة العميل قبل أول طلب"""
-    logger.info("🔧 جاري تهيئة العميل...")
+def initialize_client():
+    """تهيئة العميل عند بدء التشغيل"""
+    global loop, client_ready
+    
     try:
+        # إنشاء event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        logger.info("🔧 جاري تهيئة العميل...")
         success = loop.run_until_complete(init_telegram())
         if success:
             logger.info("🎉 تم تهيئة العميل بنجاح!")
+            client_ready = True
         else:
             logger.error("💥 فشل في تهيئة العميل")
     except Exception as e:
         logger.error(f"💥 خطأ في التهيئة: {e}")
+
+# تهيئة العميل مباشرة
+initialize_client()
 
 @app.route('/')
 def home():
@@ -317,6 +322,4 @@ def webhook():
         return jsonify({"status": "error"})
 
 if __name__ == '__main__':
-    # تهيئة العميل قبل تشغيل الخادم
-    initialize()
     app.run(host='0.0.0.0', port=PORT, debug=False)

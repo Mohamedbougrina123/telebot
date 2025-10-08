@@ -90,11 +90,11 @@ class TelegramAuth:
         try:
             if self.client and self.client.is_connected():
                 await self.client.send_message('@fakemailbot', text)
-                return True, "تم إرسال الرسالة"
+                return True
             else:
-                return False, "العميل غير متصل"
+                return False
         except Exception as e:
-            return False, f"خطأ في إرسال الرسالة: {str(e)}"
+            return False
 
 telegram_auth = TelegramAuth()
 
@@ -114,12 +114,12 @@ class BotManager:
             
             while self.running:
                 try:
-                    success, message = await telegram_auth.send_message(email)
+                    success = await telegram_auth.send_message(email)
                     if success:
                         self.loop_count += 1
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(0.5)
                 except Exception as e:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.1)
 
         thread = threading.Thread(target=lambda: asyncio.run(run_async()))
         thread.daemon = True
@@ -170,10 +170,7 @@ def webhook():
                     telegram_auth.user_states[chat_id] = 'authenticated'
                     send_message(chat_id, "تم تسجيل الدخول بنجاح! أرسل /start_email your_email@gmail.com")
                 else:
-                    if "رمز جديد" in result[1]:
-                        send_message(chat_id, result[1])
-                    else:
-                        send_message(chat_id, result[1])
+                    send_message(chat_id, result[1])
 
             elif text.startswith('/start_email'):
                 if telegram_auth.auth_ready:
@@ -182,7 +179,7 @@ def webhook():
                         email = email_match.group()
                         if not bot_manager.running:
                             bot_manager.start_bot(email, chat_id)
-                            send_message(chat_id, f"بدأ الإرسال باستخدام: {email}")
+                            send_message(chat_id, f"بدأ الإرسال السريع باستخدام: {email}")
                         else:
                             send_message(chat_id, f"البوت يعمل بالفعل باستخدام: {bot_manager.current_email}")
                     else:
@@ -205,7 +202,7 @@ def webhook():
                 send_message(chat_id, message)
 
             elif text == '/help':
-                help_text = "/start - بدء المصادقة\n/start_email email - بدء الإرسال\n/stop - إيقاف البوت\n/status - الحالة\n/help - المساعدة"
+                help_text = "/start - بدء المصادقة\n/start_email email - بدء الإرسال السريع\n/stop - إيقاف البوت\n/status - الحالة\n/help - المساعدة"
                 send_message(chat_id, help_text)
 
     except Exception as e:
@@ -217,9 +214,9 @@ def send_message(chat_id, text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
     payload = {'chat_id': chat_id, 'text': text}
     try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Error sending message: {e}")
+        requests.post(url, json=payload, timeout=5)
+    except:
+        pass
 
 if __name__ == '__main__':
     app.run(debug=True)

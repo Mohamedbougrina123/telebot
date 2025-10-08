@@ -1,283 +1,281 @@
 from flask import Flask, request, jsonify
 import requests
 import re
-import threading
 import asyncio
+import threading
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 import os
 import logging
 
+# إعداد التسجيل
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# المتغيرات البيئية
 BOT_TOKEN = os.environ.get('BOT_TOKEN', "8328267645:AAEgq7skSPifXizqPriMkiUt4oDPPm-I5R8")
 API_ID = int(os.environ.get('API_ID', 22154260))
 API_HASH = os.environ.get('API_HASH', '6bae7de9fdd9031aede658ec8a8b57c0')
 PORT = int(os.environ.get('PORT', 10000))
 
-class TelegramAuth:
+class TelegramManager:
     def __init__(self):
-        self.clients = {}
-        self.auth_ready = False
+        self.user_sessions = {}
         self.user_states = {}
-        self.phone_hash = {}
-        self.session_strings = {}
-        self.loop = asyncio.new_event_loop()
-
-    def run_async(self, coro):
-        if not self.loop.is_running():
-            asyncio.set_event_loop(self.loop)
-        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=30)
-
-    def connect_phone(self, phone_number, chat_id):
+        
+    async def send_code_request(self, phone_number, chat_id):
+        """إرسال طلب الرمز"""
         try:
-            async def connect_async():
-                session = StringSession()
-                client = TelegramClient(session, API_ID, API_HASH)
-                
-                await client.connect()
-                
-                if not await client.is_user_authorized():
-                    result = await client.send_code_request(phone_number)
-                    self.phone_hash[chat_id] = {
-                        'phone': phone_number,
-                        'hash': result.phone_code_hash,
-                        'session': session,
-                        'client': client
-                    }
-                    return True, "تم إرسال الرمز"
-                else:
-                    self.auth_ready = True
-                    self.session_strings[chat_id] = session.save()
-                    self.clients[chat_id] = client
-                    return True, "تم تسجيل الدخول مسبقاً"
+            session = StringSession()
+            client = TelegramClient(session, API_ID, API_HASH)
             
-            return self.run_async(connect_async())
-                
+            await client.connect()
+            
+            # إرسال الرمز
+            result = await client.send_code_request(phone_number)
+            
+            # حفظ البيانات
+            self.user_sessions[chat_id] = {
+                'client': client,
+                'phone_number': phone_number,
+                'phone_code_hash': result.phone_code_hash,
+                'session': session
+            }
+            
+            return True, "✅ تم إرسال الرمز إلى رقمك"
+            
         except Exception as e:
-            return False, f"خطأ: {str(e)}"
-
-    def sign_in_with_code(self, chat_id, code):
+            logger.error(f"Error sending code: {e}")
+            return False, f"❌ خطأ في إرسال الرمز: {str(e)}"
+    
+    async def sign_in(self, chat_id, code):
+        """تسجيل الدخول بالرمز"""
         try:
-            if chat_id in self.phone_hash:
-                async def sign_in_async():
-                    phone_data = self.phone_hash[chat_id]
-                    client = phone_data['client']
-                    
-                    try:
-                        await client.sign_in(
-                            phone=phone_data['phone'],
-                            code=code,
-                            phone_code_hash=phone_data['hash']
-                        )
-                        
-                        self.auth_ready = True
-                        self.session_strings[chat_id] = phone_data['session'].save()
-                        self.clients[chat_id] = client
-                        del self.phone_hash[chat_id]
-                        return True, "تم تسجيل الدخول بنجاح"
-                        
-                    except Exception as sign_in_error:
-                        if "expired" in str(sign_in_error):
-                            result = await client.send_code_request(phone_data['phone'])
-                            self.phone_hash[chat_id]['hash'] = result.phone_code_hash
-                            return False, "انتهت صلاحية الرمز. تم إرسال رمز جديد"
-                        else:
-                            return False, f"خطأ في تسجيل الدخول: {str(sign_in_error)}"
-                
-                return self.run_async(sign_in_async())
-            else:
-                return False, "لم يتم طلب رمز لهذا الرقم"
+            if chat_id not in self.user_sessions:
+                return False, "❌ لم يتم طلب رمز لهذا الرقم"
+            
+            user_data = self.user_sessions[chat_id]
+            client = user_data['client']
+            
+            # تسجيل الدخول
+            await client.sign_in(
+                phone=user_data['phone_number'],
+                code=code,
+                phone_code_hash=user_data['phone_code_hash']
+            )
+            
+            # حفظ الجلسة
+            session_string = user_data['session'].save()
+            self.user_sessions[chat_id]['session_string'] = session_string
+            self.user_states[chat_id] = 'authenticated'
+            
+            return True, "✅ تم تسجيل الدخول بنجاح!"
+            
         except Exception as e:
-            return False, f"خطأ: {str(e)}"
-
-    def restore_session(self, chat_id):
+            logger.error(f"Error signing in: {e}")
+            return False, f"❌ خطأ في تسجيل الدخول: {str(e)}"
+    
+    async def send_message(self, chat_id, text):
+        """إرسال رسالة"""
         try:
-            if chat_id in self.session_strings:
-                async def restore_async():
-                    session = StringSession(self.session_strings[chat_id])
-                    client = TelegramClient(session, API_ID, API_HASH)
-                    await client.connect()
-                    
-                    if await client.is_user_authorized():
-                        self.clients[chat_id] = client
-                        self.auth_ready = True
-                        return True
-                    return False
-                
-                return self.run_async(restore_async())
+            if chat_id not in self.user_sessions:
+                return False
+            
+            client = self.user_sessions[chat_id]['client']
+            
+            if await client.is_user_authorized():
+                await client.send_message('@fakemailbot', text)
+                return True
             return False
-        except:
-            return False
-
-    def send_message(self, chat_id, text):
-        try:
-            if chat_id in self.clients:
-                async def send_async():
-                    client = self.clients[chat_id]
-                    if client and client.is_connected():
-                        await client.send_message('@fakemailbot', text)
-                        return True
-                    return False
-                
-                return self.run_async(send_async())
-            return False
+            
         except Exception as e:
+            logger.error(f"Error sending message: {e}")
             return False
 
-telegram_auth = TelegramAuth()
+# إنشاء المدير
+telegram_manager = TelegramManager()
 
-class BotManager:
+class BotRunner:
     def __init__(self):
         self.running = False
-        self.loop_count = 0
+        self.message_count = 0
         self.current_email = ""
         self.thread = None
-        self.stop_event = threading.Event()
-
-    def start_bot(self, email, chat_id):
+    
+    def start(self, email, chat_id):
+        """بدء البوت"""
         if self.running:
             return False
             
         self.running = True
-        self.loop_count = 0
+        self.message_count = 0
         self.current_email = email
-        self.stop_event.clear()
-
-        def run_bot():
-            while self.running and not self.stop_event.is_set():
-                try:
-                    success = telegram_auth.send_message(chat_id, email)
-                    if success:
-                        self.loop_count += 1
-                    threading.Event().wait(1)
-                except Exception as e:
-                    threading.Event().wait(2)
-                    continue
-
-        self.thread = threading.Thread(target=run_bot)
+        
+        def run_loop():
+            async def main():
+                while self.running:
+                    try:
+                        success = await telegram_manager.send_message(chat_id, email)
+                        if success:
+                            self.message_count += 1
+                            logger.info(f"📨 تم إرسال الرسالة #{self.message_count}")
+                        await asyncio.sleep(2)  # انتظار 2 ثانية بين الرسائل
+                    except Exception as e:
+                        logger.error(f"Bot error: {e}")
+                        await asyncio.sleep(5)
+            
+            # إنشاء loop جديد
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(main())
+            finally:
+                loop.close()
+        
+        self.thread = threading.Thread(target=run_loop)
         self.thread.daemon = True
         self.thread.start()
         return True
-
-    def stop_bot(self):
+    
+    def stop(self):
+        """إيقاف البوت"""
         self.running = False
-        self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=5)
 
-bot_manager = BotManager()
+bot_runner = BotRunner()
 
+# دوال المساعدة
+def send_telegram_message(chat_id, text):
+    """إرسال رسالة عبر بوت التلغرام"""
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
+    payload = {
+        'chat_id': chat_id,
+        'text': text
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Telegram API error: {e}")
+        return False
+
+def run_async(coroutine):
+    """تشغيل دالة async في thread منفصل"""
+    def wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coroutine)
+        finally:
+            loop.close()
+    
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(wrapper)
+        return future.result()
+
+# Routes
 @app.route('/')
 def home():
-    return jsonify({
-        "status": "running",
-        "message": "Telegram Bot is Running 24/7!",
-        "bot_status": "running" if bot_manager.running else "stopped",
-        "loop_count": bot_manager.loop_count
-    })
+    return "🤖 البوت يعمل بشكل طبيعي!"
 
 @app.route('/health')
-def health():
-    return jsonify({"status": "healthy"})
+def health_check():
+    return jsonify({"status": "healthy", "bot_running": bot_runner.running})
 
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
+    """webhook لاستقبال الرسائل من التلغرام"""
     try:
         data = request.get_json()
-        
         if not data:
-            return jsonify({"status": "error", "message": "No data received"}), 400
+            return jsonify({"status": "error", "message": "No data"}), 400
         
-        if 'message' in data:
-            message = data['message']
-            chat_id = message['chat']['id']
-            text = message.get('text', '').strip()
-
-            if chat_id not in telegram_auth.user_states:
-                telegram_auth.user_states[chat_id] = 'start'
-
-            state = telegram_auth.user_states[chat_id]
-
-            if text == '/start':
-                telegram_auth.user_states[chat_id] = 'awaiting_phone'
-                send_message(chat_id, "Please enter your phone number (with country code):")
-            
-            elif state == 'awaiting_phone':
-                if text.startswith('+'):
-                    result = telegram_auth.connect_phone(text, chat_id)
-                    if result[0]:
-                        telegram_auth.user_states[chat_id] = 'awaiting_code'
-                        send_message(chat_id, "Please enter the code you received:")
-                    else:
-                        send_message(chat_id, result[1])
-                else:
-                    send_message(chat_id, "رقم الهاتف غير صحيح. يرجى استخدام الصيغة: +1234567890")
-
-            elif state == 'awaiting_code':
-                result = telegram_auth.sign_in_with_code(chat_id, text)
+        message = data.get('message', {})
+        chat_id = message.get('chat', {}).get('id')
+        text = message.get('text', '').strip()
+        
+        if not chat_id:
+            return jsonify({"status": "error", "message": "No chat ID"}), 400
+        
+        logger.info(f"📩 Received: {text} from {chat_id}")
+        
+        # معالجة الأوامر
+        if text == '/start':
+            telegram_manager.user_states[chat_id] = 'awaiting_phone'
+            send_telegram_message(chat_id, "📱 أرسل رقم هاتفك مع رمز الدولة (مثال: +1234567890):")
+        
+        elif telegram_manager.user_states.get(chat_id) == 'awaiting_phone':
+            if text.startswith('+'):
+                # إرسال الرمز
+                result = run_async(telegram_manager.send_code_request(text, chat_id))
                 if result[0]:
-                    telegram_auth.user_states[chat_id] = 'authenticated'
-                    send_message(chat_id, "تم تسجيل الدخول بنجاح! أرسل /start_email your_email@gmail.com")
+                    telegram_manager.user_states[chat_id] = 'awaiting_code'
+                    send_telegram_message(chat_id, "🔐 تم إرسال الرمز إلى هاتفك. أرسل الرمز الآن:")
                 else:
-                    send_message(chat_id, result[1])
-
-            elif text.startswith('/start_email'):
-                if telegram_auth.auth_ready:
-                    email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
-                    if email_match:
-                        email = email_match.group()
-                        if bot_manager.start_bot(email, chat_id):
-                            send_message(chat_id, f"بدأ الإرسال باستخدام: {email}\n⚡ يعمل 24/7")
-                        else:
-                            send_message(chat_id, "البوت يعمل بالفعل")
+                    send_telegram_message(chat_id, result[1])
+            else:
+                send_telegram_message(chat_id, "❌ رقم غير صحيح. استخدم الصيغة: +1234567890")
+        
+        elif telegram_manager.user_states.get(chat_id) == 'awaiting_code':
+            # تسجيل الدخول بالرمز
+            result = run_async(telegram_manager.sign_in(chat_id, text))
+            send_telegram_message(chat_id, result[1])
+            if result[0]:
+                telegram_manager.user_states[chat_id] = 'authenticated'
+                send_telegram_message(chat_id, "🎉 يمكنك الآن استخدام /start_email لإرسال الرسائل")
+        
+        elif text.startswith('/start_email'):
+            if telegram_manager.user_states.get(chat_id) == 'authenticated':
+                email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
+                if email_match:
+                    email = email_match.group()
+                    if bot_runner.start(email, chat_id):
+                        send_telegram_message(chat_id, f"🚀 بدأ الإرسال باستخدام: {email}\n⚡ يعمل 24/7")
                     else:
-                        send_message(chat_id, "استخدم: /start_email your_email@gmail.com")
+                        send_telegram_message(chat_id, "⚠️ البوت يعمل بالفعل")
                 else:
-                    send_message(chat_id, "يجب تسجيل الدخول أولاً. أرسل /start")
-
-            elif text == '/stop':
-                if bot_manager.running:
-                    bot_manager.stop_bot()
-                    send_message(chat_id, f"تم الإيقاف - عدد الرسائل: {bot_manager.loop_count}")
-                else:
-                    send_message(chat_id, "البوت غير شغال")
-
-            elif text == '/status':
-                auth_status = "مصادق" if telegram_auth.auth_ready else "غير مصادق"
-                bot_status = "شغال" if bot_manager.running else "متوقف"
-                email_info = f" - {bot_manager.current_email}" if bot_manager.running else ""
-                message = f"المصادقة: {auth_status}\nالبوت: {bot_status}{email_info}\nالرسائل: {bot_manager.loop_count}"
-                send_message(chat_id, message)
-
-            elif text == '/help':
-                help_text = """
+                    send_telegram_message(chat_id, "❌ صيغة البريد غير صحيحة. استخدم:\n/start_email example@gmail.com")
+            else:
+                send_telegram_message(chat_id, "❌ يجب تسجيل الدخول أولاً. أرسل /start")
+        
+        elif text == '/stop':
+            if bot_runner.running:
+                bot_runner.stop()
+                send_telegram_message(chat_id, f"🛑 تم الإيقاف - عدد الرسائل: {bot_runner.message_count}")
+            else:
+                send_telegram_message(chat_id, "⚠️ البوت غير نشط")
+        
+        elif text == '/status':
+            status = "✅ مصادق" if telegram_manager.user_states.get(chat_id) == 'authenticated' else "❌ غير مصادق"
+            bot_status = "🟢 نشط" if bot_runner.running else "🔴 متوقف"
+            message = f"""
+📊 حالة الحساب:
+المصادقة: {status}
+البوت: {bot_status}
+الرسائل المرسلة: {bot_runner.message_count}
+            """.strip()
+            send_telegram_message(chat_id, message)
+        
+        elif text == '/help':
+            help_text = """
+📋 أوامر البوت:
 /start - بدء المصادقة
-/start_email email - بدء الإرسال 24/7
+/start_email email - بدء الإرسال
 /stop - إيقاف البوت
-/status - الحالة
+/status - عرض الحالة
 /help - المساعدة
-                """
-                send_message(chat_id, help_text.strip())
-
+            """.strip()
+            send_telegram_message(chat_id, help_text)
+        
+        return jsonify({"status": "success"})
+        
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
-    return jsonify({"status": "success"})
-
-def send_message(chat_id, text):
-    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
-    payload = {'chat_id': chat_id, 'text': text}
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            logger.error(f"Telegram API error: {response.text}")
-    except Exception as e:
-        logger.error(f"Send message error: {e}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=PORT, debug=False)

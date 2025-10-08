@@ -1,5 +1,5 @@
-flask==2.3.3
-gunicorn==21.2.0
-requests==2.31.0
-telethon==2.0.0
-pysocks==1.7.1
+flask
+gunicorn
+requests
+telethon
+pysocks

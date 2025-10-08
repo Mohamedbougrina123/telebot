@@ -8,7 +8,6 @@ from telethon.sessions import StringSession
 import os
 import logging
 
-# إعداد التسجيل
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -21,102 +20,133 @@ PORT = int(os.environ.get('PORT', 10000))
 
 class TelegramAuth:
     def __init__(self):
-        self.client = None
+        self.clients = {}
         self.auth_ready = False
-        self.phone_number = None
         self.user_states = {}
         self.phone_hash = {}
         self.session_strings = {}
-        self.lock = asyncio.Lock()
 
-    async def connect_phone(self, phone_number, chat_id):
+    def run_async(self, coro):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            async with self.lock:
-                session = StringSession()
-                self.client = TelegramClient(session, API_ID, API_HASH)
-                await self.client.connect()
-                
-                if not await self.client.is_user_authorized():
-                    result = await self.client.send_code_request(phone_number)
-                    self.phone_hash[chat_id] = {
-                        'phone': phone_number,
-                        'hash': result.phone_code_hash,
-                        'session': session
-                    }
-                    self.phone_number = phone_number
-                    return True, "تم إرسال الرمز"
-                else:
-                    self.auth_ready = True
-                    self.session_strings[chat_id] = session.save()
-                    return True, "تم تسجيل الدخول مسبقاً"
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def connect_phone(self, phone_number, chat_id):
+        try:
+            session = StringSession()
+            client = TelegramClient(session, API_ID, API_HASH)
+            
+            def connect_sync():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(client.connect())
+                    
+                    if not loop.run_until_complete(client.is_user_authorized()):
+                        result = loop.run_until_complete(client.send_code_request(phone_number))
+                        self.phone_hash[chat_id] = {
+                            'phone': phone_number,
+                            'hash': result.phone_code_hash,
+                            'session': session,
+                            'client': client
+                        }
+                        return True, "تم إرسال الرمز"
+                    else:
+                        self.auth_ready = True
+                        self.session_strings[chat_id] = session.save()
+                        self.clients[chat_id] = client
+                        return True, "تم تسجيل الدخول مسبقاً"
+                finally:
+                    loop.close()
+                    
+            return connect_sync()
                 
         except Exception as e:
-            logger.error(f"Connection error: {e}")
             return False, f"خطأ: {str(e)}"
 
-    async def sign_in_with_code(self, chat_id, code):
+    def sign_in_with_code(self, chat_id, code):
         try:
-            async with self.lock:
-                if chat_id in self.phone_hash:
-                    phone_data = self.phone_hash[chat_id]
-                    
+            if chat_id in self.phone_hash:
+                phone_data = self.phone_hash[chat_id]
+                client = phone_data['client']
+                
+                def sign_in_sync():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     try:
-                        await self.client.sign_in(
+                        loop.run_until_complete(client.sign_in(
                             phone=phone_data['phone'],
                             code=code,
                             phone_code_hash=phone_data['hash']
-                        )
+                        ))
                         
                         self.auth_ready = True
                         self.session_strings[chat_id] = phone_data['session'].save()
+                        self.clients[chat_id] = client
                         del self.phone_hash[chat_id]
                         return True, "تم تسجيل الدخول بنجاح"
                         
                     except Exception as sign_in_error:
                         if "expired" in str(sign_in_error):
-                            result = await self.client.send_code_request(phone_data['phone'])
+                            result = loop.run_until_complete(client.send_code_request(phone_data['phone']))
                             self.phone_hash[chat_id]['hash'] = result.phone_code_hash
-                            return False, "انتهت صلاحية الرمز. تم إرسال رمز جديد، أرسل الرمز الجديد:"
+                            return False, "انتهت صلاحية الرمز. تم إرسال رمز جديد"
                         else:
                             return False, f"خطأ في تسجيل الدخول: {str(sign_in_error)}"
-                else:
-                    return False, "لم يتم طلب رمز لهذا الرقم"
+                    finally:
+                        loop.close()
+                        
+                return sign_in_sync()
+            else:
+                return False, "لم يتم طلب رمز لهذا الرقم"
         except Exception as e:
-            logger.error(f"Sign in error: {e}")
             return False, f"خطأ: {str(e)}"
 
-    async def restore_session(self, chat_id):
+    def restore_session(self, chat_id):
         try:
-            async with self.lock:
-                if chat_id in self.session_strings:
-                    session = StringSession(self.session_strings[chat_id])
-                    self.client = TelegramClient(session, API_ID, API_HASH)
-                    await self.client.connect()
-                    
-                    if await self.client.is_user_authorized():
-                        self.auth_ready = True
-                        return True
-                return False
-        except Exception as e:
-            logger.error(f"Restore session error: {e}")
+            if chat_id in self.session_strings:
+                def restore_sync():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        session = StringSession(self.session_strings[chat_id])
+                        client = TelegramClient(session, API_ID, API_HASH)
+                        loop.run_until_complete(client.connect())
+                        
+                        if loop.run_until_complete(client.is_user_authorized()):
+                            self.clients[chat_id] = client
+                            self.auth_ready = True
+                            return True
+                        return False
+                    finally:
+                        loop.close()
+                        
+                return restore_sync()
+            return False
+        except:
             return False
 
-    async def send_message(self, text):
+    def send_message(self, chat_id, text):
         try:
-            async with self.lock:
-                if self.client and self.client.is_connected():
-                    await self.client.send_message('@fakemailbot', text)
-                    return True
-                else:
-                    # إعادة الاتصال إذا كان مفصولاً
-                    if self.client:
-                        await self.client.connect()
-                        if await self.client.is_user_authorized():
-                            await self.client.send_message('@fakemailbot', text)
+            if chat_id in self.clients:
+                def send_sync():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        client = self.clients[chat_id]
+                        if client and client.is_connected():
+                            loop.run_until_complete(client.send_message('@fakemailbot', text))
                             return True
-                    return False
+                        return False
+                    finally:
+                        loop.close()
+                        
+                return send_sync()
+            return False
         except Exception as e:
-            logger.error(f"Send message error: {e}")
             return False
 
 telegram_auth = TelegramAuth()
@@ -139,31 +169,15 @@ class BotManager:
         self.stop_event.clear()
 
         def run_bot():
-            async def main():
+            while self.running and not self.stop_event.is_set():
                 try:
-                    await telegram_auth.restore_session(chat_id)
-                    
-                    while self.running and not self.stop_event.is_set():
-                        try:
-                            success = await telegram_auth.send_message(email)
-                            if success:
-                                self.loop_count += 1
-                                logger.info(f"Message sent: {self.loop_count}")
-                            await asyncio.sleep(1)  # زيادة الوقت لتجنب الحظر
-                        except Exception as e:
-                            logger.error(f"Bot loop error: {e}")
-                            await asyncio.sleep(2)
-                            continue
+                    success = telegram_auth.send_message(chat_id, email)
+                    if success:
+                        self.loop_count += 1
+                    threading.Event().wait(1)
                 except Exception as e:
-                    logger.error(f"Bot main error: {e}")
-
-            # إنشاء loop جديد لكل thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(main())
-            finally:
-                loop.close()
+                    threading.Event().wait(2)
+                    continue
 
         self.thread = threading.Thread(target=run_bot)
         self.thread.daemon = True
@@ -215,11 +229,7 @@ def webhook():
             
             elif state == 'awaiting_phone':
                 if text.startswith('+'):
-                    # تشغيل async function في thread منفصل
-                    def run_connect():
-                        return asyncio.run(telegram_auth.connect_phone(text, chat_id))
-                    
-                    result = run_connect()
+                    result = telegram_auth.connect_phone(text, chat_id)
                     if result[0]:
                         telegram_auth.user_states[chat_id] = 'awaiting_code'
                         send_message(chat_id, "Please enter the code you received:")
@@ -229,10 +239,7 @@ def webhook():
                     send_message(chat_id, "رقم الهاتف غير صحيح. يرجى استخدام الصيغة: +1234567890")
 
             elif state == 'awaiting_code':
-                def run_sign_in():
-                    return asyncio.run(telegram_auth.sign_in_with_code(chat_id, text))
-                
-                result = run_sign_in()
+                result = telegram_auth.sign_in_with_code(chat_id, text)
                 if result[0]:
                     telegram_auth.user_states[chat_id] = 'authenticated'
                     send_message(chat_id, "تم تسجيل الدخول بنجاح! أرسل /start_email your_email@gmail.com")
@@ -293,10 +300,5 @@ def send_message(chat_id, text):
     except Exception as e:
         logger.error(f"Send message error: {e}")
 
-@app.route('/test')
-def test():
-    return jsonify({"message": "Test endpoint working"})
-
-# هذا مهم لـ Render
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=PORT, debug=False)

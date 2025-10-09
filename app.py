@@ -50,10 +50,10 @@ async def sending_loop(email, chat_id):
                 if user['message_count'] % 20 == 0:
                     send_telegram_bot_message(chat_id, f"تم إرسال {user['message_count']} رسالة")
             
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
         except Exception as e:
             print(f"Loop error: {e}")
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
 def start_sending_loop(email, chat_id):
     loop = asyncio.new_event_loop()
@@ -105,8 +105,8 @@ def webhook():
                 send_telegram_bot_message(chat_id, 
                     f"بدأ الإرسال إلى @fakemailbot\n"
                     f"البريد: {email}\n"
-                    f"السرعة: كل 2 ثانية\n\n"
-                    "سيستمر الإرسال حتى تستخدم /stop")
+                    f"السرعة: كل 1 ثانية\n\n"
+                    "سيستمر الإرسال حتى تستخدم /stop\nBy Mohamed Bougrina !")
                 
                 import threading
                 thread = threading.Thread(target=start_sending_loop, args=(email, chat_id))

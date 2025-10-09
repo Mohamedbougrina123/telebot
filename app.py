@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
 import requests
-import re
 import os
 import asyncio
 from telethon import TelegramClient
@@ -15,10 +14,8 @@ API_HASH = '6bae7de9fdd9031aede658ec8a8b57c0'
 PORT = int(os.environ.get('PORT', 10000))
 
 user_data = {}
-telegram_client = None
 client_ready = False
 user_info = {}
-sending_tasks = {}
 
 def send_telegram_bot_message(chat_id, text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
@@ -29,45 +26,19 @@ def send_telegram_bot_message(chat_id, text):
     except:
         return False
 
-async def init_telegram():
-    global telegram_client, client_ready, user_info
-    try:
-        session = StringSession(SESSION_STRING)
-        telegram_client = TelegramClient(session, API_ID, API_HASH)
-        await telegram_client.start()
-        
-        if await telegram_client.is_user_authorized():
-            me = await telegram_client.get_me()
-            user_info = {
-                'first_name': me.first_name or "",
-                'phone': me.phone or "",
-                'id': me.id
-            }
-            client_ready = True
-            return True
-        return False
-    except Exception as e:
-        print(f"Init error: {e}")
-        return False
-
 async def send_telegram_message(text):
     try:
-        await telegram_client.send_message('@fakemailbot', text)
+        session = StringSession(SESSION_STRING)
+        client = TelegramClient(session, API_ID, API_HASH)
+        await client.start()
+        await client.send_message('@fakemailbot', text)
+        await client.disconnect()
         return True
-    except:
+    except Exception as e:
+        print(f"Send error: {e}")
         return False
 
-def run_async(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-run_async(init_telegram())
-
-async def sending_loop(chat_id, email):
+async def sending_loop(email, chat_id):
     user = user_data[chat_id]
     
     while user.get('running', False):
@@ -76,19 +47,18 @@ async def sending_loop(chat_id, email):
             if success:
                 user['message_count'] += 1
                 
-                if user['message_count'] % 50 == 0:
+                if user['message_count'] % 20 == 0:
                     send_telegram_bot_message(chat_id, f"تم إرسال {user['message_count']} رسالة")
             
             await asyncio.sleep(2)
-        except:
+        except Exception as e:
+            print(f"Loop error: {e}")
             await asyncio.sleep(2)
 
-def start_sending(chat_id, email):
-    if chat_id in sending_tasks:
-        sending_tasks[chat_id].cancel()
-    
-    task = asyncio.create_task(sending_loop(chat_id, email))
-    sending_tasks[chat_id] = task
+def start_sending_loop(email, chat_id):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(sending_loop(email, chat_id))
 
 @app.route('/')
 def home():
@@ -125,13 +95,9 @@ def webhook():
                 "مثال: /start_email test@gmail.com")
 
         elif text.startswith('/start_email'):
-            if not client_ready:
-                send_telegram_bot_message(chat_id, "الجلسة غير جاهزة")
-                return jsonify({"status": "success"})
-
-            email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
-            if email_match:
-                email = email_match.group()
+            parts = text.split()
+            if len(parts) >= 2:
+                email = parts[1]
                 user['email'] = email
                 user['running'] = True
                 user['message_count'] = 0
@@ -142,42 +108,35 @@ def webhook():
                     f"السرعة: كل 2 ثانية\n\n"
                     "سيستمر الإرسال حتى تستخدم /stop")
                 
-                run_async(sending_loop(chat_id, email))
+                import threading
+                thread = threading.Thread(target=start_sending_loop, args=(email, chat_id))
+                thread.daemon = True
+                thread.start()
                 
             else:
-                send_telegram_bot_message(chat_id, "لم يتم العثور على بريد إلكتروني. استخدم: /start_email test@gmail.com")
+                send_telegram_bot_message(chat_id, "استخدم: /start_email test@gmail.com")
 
         elif text == '/stop':
             if user['running']:
                 user['running'] = False
-                if chat_id in sending_tasks:
-                    sending_tasks[chat_id].cancel()
-                
                 send_telegram_bot_message(chat_id, 
                     f"تم إيقاف البوت\n"
                     f"الرسائل المرسلة: {user['message_count']}")
 
         elif text == '/test_session':
-            if client_ready:
-                result = run_async(send_telegram_message("رسالة اختبار من البوت"))
-                if result:
-                    send_telegram_bot_message(chat_id, 
-                        "✅ اختبار الجلسة ناجح\n"
-                        f"👤 المستخدم: {user_info.get('first_name', '')}\n"
-                        f"📞 الرقم: {user_info.get('phone', '')}")
-                else:
-                    send_telegram_bot_message(chat_id, "❌ فشل في إرسال رسالة الاختبار")
+            send_telegram_bot_message(chat_id, "جاري اختبار الجلسة...")
+            success = asyncio.run(send_telegram_message("رسالة اختبار من البوت"))
+            if success:
+                send_telegram_bot_message(chat_id, "✅ اختبار الجلسة ناجح - تم إرسال رسالة اختبار")
             else:
-                send_telegram_bot_message(chat_id, "❌ الجلسة غير جاهزة")
+                send_telegram_bot_message(chat_id, "❌ فشل في اختبار الجلسة")
 
         elif text == '/status':
             bot_status = "🟢 نشط" if user['running'] else "🔴 متوقف"
-            session_status = "✅ جاهزة" if client_ready else "❌ غير جاهزة"
             
             status_msg = [
                 f"📊 حالة البوت:",
                 f"• البوت: {bot_status}",
-                f"• الجلسة: {session_status}",
                 f"• الرسائل: {user['message_count']}",
                 f"• البريد: {user.get('email', 'لا يوجد')}"
             ]
@@ -189,18 +148,13 @@ def webhook():
                 "📋 الأوامر المتاحة:",
                 "",
                 "/start_email email - بدء الإرسال إلى @fakemailbot",
-                "/stop - إيقاف البوت وعرض الإحصائيات",
+                "/stop - إيقاف البوت وعرض الإحصائيات", 
                 "/test_session - اختبار الجلسة",
-                "/status - عرض الحالة الكاملة",
-                "/help - عرض هذه المساعدة",
+                "/status - عرض الحالة",
+                "/help - المساعدة",
                 "",
                 "📝 مثال:",
-                "/start_email test@gmail.com",
-                "",
-                "⚡ المميزات:",
-                "• إرسال تلقائي كل 2 ثانية",
-                "• يستمر حتى يتم إيقافه",
-                "• تحديثات كل 50 رسالة"
+                "/start_email test@gmail.com"
             ]
             send_telegram_bot_message(chat_id, "\n".join(help_msg))
 
